@@ -15,9 +15,26 @@ rom_sha256 = "0838e531fe22c077528febe14cb3ff7c492f1f5fa8de354192bdff7137c27f5b"
 [[feature]]
 id = "simultaneous"
 name = "Simultaneous co-op (Experimental)"
-description = "Experimental prototype. Assign both players, then choose 2 Player in the original menus. Co-op uses separate saves. Expect bugs in unusual interactions."
+description = "Experimental prototype. Assign every player, then choose 2 Player in the original menus. Co-op uses separate saves. Expect bugs in unusual interactions."
 group = "Gameplay"
 default_enabled = false
+
+[[option]]
+feature = "simultaneous"
+id = "players"
+label = "Players"
+description = "How many players join when you choose 2 Player. Player 3 uses the third controller (config.ini EnableGamepad3 / ControlsP3) or keybinds.ini [player3]."
+group = "Gameplay"
+type = "choice"
+default = "2"
+
+[[option.choice]]
+value = "2"
+label = "2 (Mario and Luigi)"
+
+[[option.choice]]
+value = "3"
+label = "3 (adds a third player)"
 
 [[plugin]]
 feature = "simultaneous"

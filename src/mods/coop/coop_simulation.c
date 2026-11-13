@@ -929,7 +929,9 @@ static void draw_secondary_players(CpuState *cpu,CoopMachine *m) {
         if(!g_ram[0x187a])g_ram[0x188b]=0;
         memcpy(g_ram,scratch,sizeof(scratch));
         for(unsigned slot=0;slot<128;++slot)g_ram[0x201+slot*4]=0xf0;
-        g_ram[0xdb3]=(uint8_t)(p->character==1);
+        /* Character 1 is Luigi; later characters draw from Luigi's art and
+         * receive their own colors when the picture is captured. */
+        g_ram[0xdb3]=(uint8_t)(p->character>=1);
         restore_registers(cpu,&caller);
         /* Enter the body/cape stage after Yoshi and shared star music work.
          * Its bank-save/RTL epilogue requires the original one-byte DB frame. */
@@ -945,7 +947,7 @@ static void draw_secondary_players(CpuState *cpu,CoopMachine *m) {
         }
         if(!interp_bridge_run(cpu,entry) || cpu->S!=caller.S)
             Die("Native co-op player draw failed its guest return contract");
-        SmwCoopCaptureVisual(&a->pending);capture(m,a);
+        SmwCoopCaptureVisual(&a->pending,p->character);capture(m,a);
     }
     --player_call_depth;
     restore_registers(cpu,&caller);

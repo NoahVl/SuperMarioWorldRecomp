@@ -5,6 +5,10 @@
 #include "snes/saveload.h"
 
 void SmwCoopEnable(bool enabled);
+/* Co-op party size started by the original menu's "2 Player" entry (2 or 3).
+ * Applies to the next selection; the running session keeps its roster. */
+void SmwCoopSetRosterSize(unsigned count);
+unsigned SmwCoopRosterSize(void);
 bool SmwCoopEnabled(void);
 bool SmwCoopActive(void);
 CoopMachine *SmwCoopMachine(void);

@@ -85,6 +85,17 @@ int main(void) {
     enter_menu(&cpu);
     assert(select_count(&cpu,4)==0x00c592);
     assert(writes==3 && reads==3 && SmwCoopActive());
+
+    /* A three-player party uses the same menu row and the same co-op saves. */
+    SmwCoopSetRosterSize(3);
+    enter_menu(&cpu);
+    assert(select_count(&cpu,2)==0x009cb0);
+    assert(SmwCoopPlayerCount()==3 && SmwCoopMachine()->actor_count==3);
+    assert(writes==3 && reads==3 && !strcmp(root,"saves/native-coop-v1"));
+    remembered('3');
+    assert(SmwCoopPrepareStorage() && SmwCoopPlayerCount()==3);
+    /* Out-of-range sizes fall back to two players. */
+    SmwCoopSetRosterSize(9);assert(SmwCoopRosterSize()==2);
     SmwCoopEnable(false);
     assert(SmwCoopGuestHook(&cpu,0x009cb0)==0);
     assert(SmwCoopGuestHook(&cpu,0x009e0d)==0);

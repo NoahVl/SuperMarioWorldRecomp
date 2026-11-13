@@ -81,6 +81,58 @@ to player 1, the second to player 2. SDL's player-index property
 is honored if your controller reports one, so swapping controllers
 mid-session usually does the right thing.
 
+## Three-player co-op
+
+With **SMW Native Co-op (Experimental)** enabled, set its **Players** option
+to **3** on the launcher's Mods page, then choose **2 Player** in the original
+game menu. Mario, Luigi and a third player (Luigi's art with a purple
+cap and shirt, and a purple **3** on the reserve box) play together.
+Two- and three-player parties share the same separate co-op saves.
+
+Player 3 is configured in `config.ini` (the launcher's input page only shows
+players 1 and 2):
+
+```ini
+[GamepadMap]
+EnableGamepad3 = true
+DeadzoneP3 = 30
+ControlsP3 = DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb
+```
+
+Controllers are handed out in connection order: the first goes to player 1,
+the second to player 2 and the third to player 3. Plug them in in that order
+before launching. The game waits (frozen) until all three seats are
+assigned.
+
+To play player 3 on the keyboard, add a `[player3]` section to
+`keybinds.ini` and add 4 to `KeyboardPlayers` in `config.ini`
+(`KeyboardPlayers = 4` for P3 only, `7` for all three). The keys must not
+overlap another keyboard player's keys.
+
+Limits: three-player parties are local only (netplay carries two seats), and
+diagnostic replay recording pauses while three players are selected. At native
+4:3 width the third reserve box moves down a row. Widescreen has room for all
+three side by side.
+
+## Switch 2 controllers
+
+There are two ways to use a Switch 2 Pro Controller:
+
+1. **Recommended: your Windows remapping app in Xbox (XInput) mode.** The
+   game sees an ordinary Xbox controller and the default mapping above
+   applies. If the app also leaves the real controller visible, the game can
+   see one controller twice and give it two seats. Use the app's "hide
+   original device" option (often HidHide) so each controller appears once.
+   PS4 (DS4) emulation also works, because SDL treats it as a standard gamepad.
+2. **Direct, over USB cable.** Release builds use SDL 3.4, whose HIDAPI driver
+   recognizes the Switch 2 Pro Controller over USB. Bluetooth support for
+   Switch 2 controllers in SDL is newer and less reliable. If the controller
+   doesn't appear in the `[Gamepad]` startup log, use option 1.
+
+Nintendo layout note: the defaults are by *position*, so the bottom face
+button (Switch "B") is SNES B and the right face button (Switch "A") is SNES
+A, matching the original SNES pad.
+
 ## Troubleshooting
 
 - **Controller doesn't respond at all** — check that the smw.ini

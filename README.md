@@ -158,6 +158,9 @@ unmodified Super Mario World (USA) ROM.
 3. Use the original save-file menus and select **2 Player**. Co-op saves and
    save states are stored separately from regular play. **1 Player** retains
    ordinary solo behavior.
+4. Optional: set the mod's **Players** option to **3** for a three-player
+   party. See [CONTROLLER.md](CONTROLLER.md#three-player-co-op) for player 3's
+   controller setup.
 
 The prototype includes independent movement, powerups, reserve items and
 ordinary Yoshi riding; shared enemy outcomes and rewards; recovery bubbles;

@@ -25,6 +25,11 @@ enum {
   kKeys_ToggleRenderer,
   kKeys_VolumeUp,
   kKeys_VolumeDown,
+  /* Third simultaneous co-op seat. Appended so earlier command IDs keep
+   * their values; the seat is fed to the runtime outside the packed
+   * two-player input word. */
+  kKeys_ControlsP3,
+  kKeys_ControlsP3_Last = kKeys_ControlsP3 + 11,
   kKeys_Total,
 };
 
@@ -69,7 +74,7 @@ typedef struct Config {
 
   // Gamepad analog-stick deadzone, per player, 0..100 % of full stick range.
   // Applied where the left stick is mapped to the d-pad. Default 30.
-  uint8 deadzone[2];
+  uint8 deadzone[3];
 
   // Boot straight to the game, skipping the GUI launcher, on subsequent runs.
   // Set from the launcher's dashboard checkbox. Force the launcher back with the
@@ -89,9 +94,9 @@ typedef struct Config {
   char *memory_buffer;
   const char *shader;
 
-  bool enable_gamepad[2];
+  bool enable_gamepad[3];
 
-  // Which players have keyboard controls
+  // Which players have keyboard controls (bit 0 = P1, bit 1 = P2, bit 2 = P3)
   uint8 has_keyboard_controls;
   /* -1 preserves legacy binding-derived defaults; otherwise explicit seats. */
   int8 keyboard_players;

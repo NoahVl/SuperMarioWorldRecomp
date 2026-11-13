@@ -20,9 +20,11 @@
 
 #define COOP_ROOT "saves/native-coop-v1"
 #define SELECTION_FILE COOP_ROOT "/last-mode.txt"
-enum { PRODUCT_PLAYERS=2, RTS_PC=0x00c592, FILE_ENTER=0x009cb0 };
+/* Host seats the product can feed. The original menu's "2 Player" entry
+ * starts a co-op party of roster_size players (the package's Players option). */
+enum { MAX_HOST_PLAYERS=3, RTS_PC=0x00c592, FILE_ENTER=0x009cb0 };
 static bool enabled, choosing, files_chosen, disconnected;
-static unsigned selected_count;
+static unsigned selected_count, roster_size=2;
 static CoopMachine machine, staged;
 static size_t staged_size;
 static bool staged_consumed;
@@ -36,6 +38,10 @@ static uint32_t read32(const uint8_t *p) {
 }
 static void put32(uint8_t *p,uint32_t v) {for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(v>>(8*i));}
 
+void SmwCoopSetRosterSize(unsigned count) {
+    roster_size=count>=2 && count<=MAX_HOST_PLAYERS?count:2;
+}
+unsigned SmwCoopRosterSize(void) {return roster_size;}
 void SmwCoopEnable(bool on) {
     coop_machine_destroy(&machine);coop_machine_destroy(&staged);
     enabled=on;selected_count=0;choosing=files_chosen=disconnected=false;
@@ -83,12 +89,14 @@ static void trace_storage(unsigned count,const char *phase) {
     last=ns;
 }
 static bool choose_storage(unsigned count,bool remember) {
-    if(count!=1 && count!=PRODUCT_PLAYERS)return false;
+    if(count!=1 && count!=roster_size)return false;
     trace_storage(count,"begin");
     CoopMachine next={0};
     if(count>1 && !coop_machine_init(&next,count))return false;
     trace_storage(count,"allocated");
-    if(count!=selected_count) {
+    /* Every co-op party size shares one namespace; only 1P<->co-op moves. */
+    bool same_namespace=selected_count && (count>1)==(selected_count>1);
+    if(!same_namespace) {
         /* Copy for durable writing only when actually leaving a namespace.
          * The worker never reads live guest bytes or the mutable save root.
          * Selecting the count
@@ -118,7 +126,10 @@ static bool choose_storage(unsigned count,bool remember) {
 bool SmwCoopPrepareStorage(void) {
     if(!enabled)return true;
     FILE *f=fopen(SELECTION_FILE,"rb");int count=f?fgetc(f):0;if(f)fclose(f);
-    if(count=='1' || count=='2')return choose_storage((unsigned)(count-'0'),false);
+    /* Any remembered party size resumes as the currently configured one;
+     * every co-op size shares the same separate campaign saves. */
+    if(count=='1')return choose_storage(1,false);
+    if(count>='2' && count<='0'+MAX_HOST_PLAYERS)return choose_storage(roster_size,false);
     /* Pending selection has no campaign data and never reads normal SRAM. */
     RtlSetSaveRoot("saves/native-coop-menu");
     return false;
@@ -140,9 +151,10 @@ bool SmwCoopHostFrame(uint32_t inputs) {
         for(size_t i=0;i<machine.actor_count;++i) {
             CoopActor *a=&machine.actors[i];
             CoopPlayer *p=coop_player(&machine.session,a->player);
-            /* Product host has two input seats; the core and state format do
-             * not. Expansion changes this adapter and input UI together. */
-            bool connected=a->input_seat<PRODUCT_PLAYERS && (inputs&(1u<<(30+a->input_seat)))!=0;
+            /* Seats 1-2 travel in the packed word's bits 30/31; further seats
+             * are published by the host through the runtime pad table. */
+            bool connected=a->input_seat<2 ? (inputs&(1u<<(30+a->input_seat)))!=0 :
+                a->input_seat<MAX_HOST_PLAYERS && RtlGetPadConnected((int)a->input_seat)!=0;
             if(p->connected!=connected) {
                 p->held_input=p->pressed_input=0;p->action_latch=0xfff;
             }
@@ -151,7 +163,8 @@ bool SmwCoopHostFrame(uint32_t inputs) {
         }
     }
     if(disconnected && !was_disconnected)
-        fprintf(stderr,"[co-op] Waiting for both controller/keyboard assignments.\n");
+        fprintf(stderr,"[co-op] Waiting for all %u players' controller/keyboard assignments.\n",
+            selected_count);
     return !disconnected;
 }
 
@@ -168,7 +181,10 @@ uint32_t SmwCoopGuestHook(CpuState *cpu,uint32_t pc) {
         break;
     case 0x009e0d:
         if(choosing) {
+            /* The ROM menu offers 1 or 2 players; 2 means the co-op party.
+             * Any other row stays invalid and is rejected below. */
             unsigned count=(cpu->X&0xff)+1;
+            if(count==2)count=roster_size;
             if(!choose_storage(count,true))return RTS_PC;
             choosing=false;files_chosen=true;g_ram[0x100]=7;
             return FILE_ENTER;

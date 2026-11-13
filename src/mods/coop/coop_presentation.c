@@ -9,8 +9,24 @@
 static unsigned read16(const uint8_t *p,unsigned a) {return p[a]|(p[a+1]<<8);}
 static uint16_t picture[0x8000],palette[256];
 
+/* Player colors for characters beyond Mario (0) and Luigi (1). The third
+ * player draws with Luigi's original art; his green cap/shirt (the only
+ * green-dominant entries in either player palette, plain or fire) becomes
+ * purple so all three players stay distinct. RGB15: r bits 0-4, g 5-9, b 10-14. */
+static uint16_t character_color(uint16_t color,uint32_t character) {
+    if(character<2)return color;
+    unsigned r=color&31,g=(color>>5)&31,b=(color>>10)&31;
+    if(g<=r+2 || g<=b+2)return color;
+    unsigned low=r<b?r:b;
+    return (uint16_t)(g|(low<<5)|(g<<10));
+}
+/* HUD/identity color per character: red, green, purple, then white. */
+static uint16_t character_badge(uint32_t character) {
+    return character==0?0x801f:character==1?0x83e0:character==2?0xfc1f:0xffff;
+}
+
 static void capture_pieces(CoopVisualPiece *pieces,uint32_t *size,unsigned capacity,
-                           bool primary,int origin_x,int origin_y) {
+                           bool primary,int origin_x,int origin_y,uint32_t character) {
     /* Reproduce MarioGFXDMA's source selection into private picture memory.
      * The guest NMI still uploads the primary once; it is never replayed. */
     memcpy(picture,g_ppu->vram,sizeof(picture));
@@ -20,7 +36,8 @@ static void capture_pieces(CoopVisualPiece *pieces,uint32_t *size,unsigned capac
     unsigned pal=read16(g_ram,0xd82);
     if(count) {
         if(pal<0x8000 || pal>0xffec)Die("Invalid native co-op player palette");
-        for(unsigned i=0;i<10;++i)palette[0x86+i]=(uint16_t)read16(g_rom,(pal&0x7fff)+i*2);
+        for(unsigned i=0;i<10;++i)
+            palette[0x86+i]=character_color((uint16_t)read16(g_rom,(pal&0x7fff)+i*2),character);
     }
     for(unsigned row=0;row<2;++row)for(unsigned tile=0;tile<count;tile+=2) {
         unsigned source=read16(g_ram,0xd85+row*10+tile);
@@ -61,19 +78,21 @@ static void capture_pieces(CoopVisualPiece *pieces,uint32_t *size,unsigned capac
         }
     }
 }
-static void capture_visual(CoopVisual *visual,bool primary) {
+static void capture_visual(CoopVisual *visual,bool primary,uint32_t character) {
     capture_pieces(visual->pieces,&visual->count,COOP_BODY_PIECES,primary,
         (int16_t)(read16(g_ram,0x94)-read16(g_ram,0x1a)),
-        (int16_t)(read16(g_ram,0x96)-read16(g_ram,0x1c)));
+        (int16_t)(read16(g_ram,0x96)-read16(g_ram,0x1c)),character);
 }
-void SmwCoopCaptureVisual(CoopVisual *visual) {capture_visual(visual,false);}
+void SmwCoopCaptureVisual(CoopVisual *visual,uint32_t character) {
+    capture_visual(visual,false,character);
+}
 void SmwCoopCaptureMount(CoopMountVisual *visual,int x,int y) {
     capture_pieces(visual->pieces,&visual->count,COOP_MOUNT_PIECES,false,
-        x-(int)read16(g_ram,0x1a),y-(int)read16(g_ram,0x1c));
+        x-(int)read16(g_ram,0x1a),y-(int)read16(g_ram,0x1c),0);
 }
 void SmwCoopCaptureFireball(CoopFireball *f,int x,int y) {
     capture_pieces(&f->pending,&f->pending_count,1,false,
-        (int16_t)(x-(int)read16(g_ram,0x1a)),(int16_t)(y-(int)read16(g_ram,0x1c)));
+        (int16_t)(x-(int)read16(g_ram,0x1a)),(int16_t)(y-(int)read16(g_ram,0x1c)),0);
 }
 void SmwCoopPresentationLatch(void) {
     CoopMachine *m=SmwCoopMachine();if(!m)return;
@@ -84,7 +103,8 @@ void SmwCoopPresentationLatch(void) {
         CoopActor *primary=coop_machine_actor(m,m->session.primary);
         CoopPlayer *p=coop_player(&m->session,m->session.primary);
         primary->pending.count=0;
-        if(p->life==COOP_PLAYING || p->life==COOP_DYING)capture_visual(&primary->pending,true);
+        if(p->life==COOP_PLAYING || p->life==COOP_DYING)
+            capture_visual(&primary->pending,true,p->character);
     }
     for(size_t i=0;i<m->actor_count;++i) {
         if(!level)m->actors[i].pending.count=0;
@@ -111,7 +131,7 @@ static void number(uint16_t *pixels,unsigned stride,int x,int y,unsigned n,uint1
             pixels[(y+row)*stride+x+col]=color;
 }
 static void identity(uint16_t *pixels,unsigned stride,int y,const CoopPlayer *p) {
-    uint16_t color=p->character==0?0x801f:p->character==1?0x83e0:0xffff;
+    uint16_t color=character_badge(p->character);
     /* A compact P plus the stable player number for recovery bubbles and
      * future characters. Player IDs are independent of array order. */
     static const uint8_t letter[]={6,5,6,4,4};
@@ -154,13 +174,14 @@ static void reserve_picture(uint16_t *pixels,const CoopPlayer *p) {
             if(pixel)pixels[(y+15)*DECOR_WIDTH+x+8]=0x8000|g_ppu->cgram[128+((attr>>1)&7)*16+pixel];
         }
     }
-    static const uint8_t letters[2][5]={{17,27,21,17,17},{16,16,16,16,31}};
-    if(p->character<2) {
+    /* M, L, then a 3 for the third player. */
+    static const uint8_t letters[3][5]={{17,27,21,17,17},{16,16,16,16,31},{30,1,14,1,30}};
+    if(p->character<3) {
         /* A small corner badge overlaps the original blue border. */
         for(unsigned y=8;y<15;++y)for(unsigned x=3;x<10;++x)
             pixels[y*DECOR_WIDTH+x]=0x8000;
         for(unsigned y=0;y<5;++y)for(unsigned x=0;x<5;++x)
-            if(letters[p->character][y]&(16>>x))pixels[(y+9)*DECOR_WIDTH+x+4]=p->character?0x83e0:0x801f;
+            if(letters[p->character][y]&(16>>x))pixels[(y+9)*DECOR_WIDTH+x+4]=character_badge(p->character);
     } else identity(pixels,DECOR_WIDTH,1,p);
 }
 static void bubble_picture(uint16_t *pixels,const CoopPlayer *p) {

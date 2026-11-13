@@ -221,6 +221,13 @@ static uint32 g_input_state;
  * main loop doesn't clear bits the gamepad just set. OR'd into `inputs`
  * once per frame alongside g_input_state and axis_buttons. */
 static uint32 g_pad_buttons;
+/* Third co-op seat. The packed RtlRunFrame word only carries two 12-bit
+ * players plus the connection bits, so player 3 is kept separately and
+ * handed to the runtime through RtlSetPadState(2, ...) each frame. Bits use
+ * the same runner layout as one 12-bit half of the packed word. */
+static uint32 g_input_state_p3;  /* keyboard */
+static uint32 g_pad_buttons_p3;  /* gamepad buttons */
+enum { kHostGamepads = 3 };
 static bool g_display_perf;
 static int g_curr_fps;
 static int g_ppu_render_flags = 0;
@@ -234,7 +241,7 @@ static SnesRecompBenchmark g_benchmark;
 static SDL_mutex *g_benchmark_phase_mutex;
 #endif
 
-static GamepadInfo g_gamepad[2];
+static GamepadInfo g_gamepad[kHostGamepads];
 #if SNESRECOMP_NET
 static SnesNetplayConfig g_netplay_cfg;
 static int g_netplay_pending;
@@ -452,8 +459,26 @@ void NORETURN Die(const char *error) {
 }
 
 static GamepadInfo *GetGamepadInfo(SDL_JoystickID id) {
-  return (g_gamepad[0].joystick_id == id) ? &g_gamepad[0] :
-    (g_gamepad[1].joystick_id == id) ? &g_gamepad[1] : NULL;
+  for (int i = 0; i < kHostGamepads; i++)
+    if (g_gamepad[i].joystick_id == id) return &g_gamepad[i];
+  return NULL;
+}
+
+/* Publish the third seat before the co-op host gate and guest frame read it.
+ * Netplay transports only the packed two-player word, so the seat stays
+ * disconnected there rather than diverging between peers. */
+static void PublishThirdSeat(bool local) {
+  if (!local) {
+    RtlSetPadState(2, 0);
+    RtlSetPadConnected(2, 0);
+    return;
+  }
+  if (g_input_state_p3 & 0xf0)
+    g_gamepad[2].axis_buttons = 0;
+  RtlSetPadState(2, (uint16)((g_input_state_p3 | g_pad_buttons_p3 |
+                              g_gamepad[2].axis_buttons) & 0xfff));
+  RtlSetPadConnected(2, g_gamepad[2].joystick_id != -1 ||
+                        (g_config.has_keyboard_controls & 4) != 0);
 }
 
 void ChangeWindowScale(int scale_step) {
@@ -1513,8 +1538,10 @@ int main(int argc, char** argv) {
         g_config.audio_freq          = (uint16)ls.audio_freq;
         g_config.enable_gamepad[0]   = ls.player_src[0] == 2;
         g_config.enable_gamepad[1]   = ls.player_src[1] == 2;
+        /* The launcher edits seats 1 and 2; seat 3 is config.ini-only. */
         g_config.has_keyboard_controls =
-            (uint8)((ls.player_src[0] == 1 ? 1 : 0) | (ls.player_src[1] == 1 ? 2 : 0));
+            (uint8)((g_config.has_keyboard_controls & 4) |
+                    (ls.player_src[0] == 1 ? 1 : 0) | (ls.player_src[1] == 1 ? 2 : 0));
         g_config.deadzone[0] = (uint8)ls.deadzone[0];
         g_config.deadzone[1] = (uint8)ls.deadzone[1];
         g_config.skip_launcher = ls.skip_launcher != 0;
@@ -1696,7 +1723,7 @@ int main(int argc, char** argv) {
     SetEnvVar("SNESRECOMP_MSU1", g_config.msu1_dir);
   }
 
-  g_gamepad[0].joystick_id = g_gamepad[1].joystick_id = -1;
+  for (int i = 0; i < kHostGamepads; i++) g_gamepad[i].joystick_id = -1;
   g_snes_width = 256;
   g_snes_height = 224;
 
@@ -1775,11 +1802,12 @@ session_reboot:
 #if SNESRECOMP_NET
   /* A rematch is a cold emulation session inside the same process. Lobby and
    * ROM selection survive, while all device/input/session state is rebuilt. */
-  memset(&g_gamepad[0], 0, sizeof(g_gamepad[0]));
-  memset(&g_gamepad[1], 0, sizeof(g_gamepad[1]));
-  g_gamepad[0].joystick_id = g_gamepad[1].joystick_id = -1;
+  memset(g_gamepad, 0, sizeof(g_gamepad));
+  for (int i = 0; i < kHostGamepads; i++) g_gamepad[i].joystick_id = -1;
   g_input_state = 0;
   g_pad_buttons = 0;
+  g_input_state_p3 = 0;
+  g_pad_buttons_p3 = 0;
   g_paused = 0;
   g_turbo = 0;
   g_netplay_started = 0;
@@ -1992,8 +2020,9 @@ error_reading:;
     int njs = SDL_NumJoysticks();
 #endif
     printf("[Gamepad] SDL reports %d joystick(s) at startup. "
-           "enable_gamepad=[%d,%d]\n",
-           njs, g_config.enable_gamepad[0], g_config.enable_gamepad[1]);
+           "enable_gamepad=[%d,%d,%d]\n",
+           njs, g_config.enable_gamepad[0], g_config.enable_gamepad[1],
+           g_config.enable_gamepad[2]);
     for (int i = 0; i < njs; i++) {
 #if SNESRECOMP_SDL3
       SDL_JoystickID joystick = joysticks[i];
@@ -2240,6 +2269,7 @@ error_reading:;
         continue;
       }
       inputs = snes_netplay_published_inputs() | snes_netplay_active_mask();
+      PublishThirdSeat(false);
       uint64_t guest_phase = BenchmarkPhaseBegin();
       SmwReplayClose();
       if (SmwCoopHostFrame(inputs)) RtlRunFrame(inputs);
@@ -2275,6 +2305,7 @@ error_reading:;
       uint64_t guest_phase = BenchmarkPhaseBegin();
       TraceAudioFrame(frameCtr, "before_guest");
       if (!SmwReplayBegin(&inputs)) { running=false; break; }
+      PublishThirdSeat(true);
       g_snes_width=g_smw_viewport.width;
       if (SmwCoopHostFrame(inputs)) RtlRunFrame(inputs);
       SmwReplayEnd();
@@ -2617,7 +2648,8 @@ error_reading:;
       g_config.enable_gamepad[0] = ls.player_src[0] == 2;
       g_config.enable_gamepad[1] = ls.player_src[1] == 2;
       g_config.has_keyboard_controls =
-          (uint8)((ls.player_src[0] == 1 ? 1 : 0) |
+          (uint8)((g_config.has_keyboard_controls & 4) |
+                  (ls.player_src[0] == 1 ? 1 : 0) |
                   (ls.player_src[1] == 1 ? 2 : 0));
       g_config.deadzone[0] = (uint8)ls.deadzone[0];
       g_config.deadzone[1] = (uint8)ls.deadzone[1];
@@ -2716,11 +2748,14 @@ static void RefreshKeybindControllerBits(void) {
   const uint8_t *keys = snesrecomp_sdl_get_keyboard_state();
   uint16_t kb_p1 = (g_config.has_keyboard_controls & 1) ? keybinds_read_player(keys, 1) : 0;
   uint16_t kb_p2 = (g_config.has_keyboard_controls & 2) ? keybinds_read_player(keys, 2) : 0;
+  /* keybinds.ini [player3]; unbound unless the file names it. */
+  uint16_t kb_p3 = (g_config.has_keyboard_controls & 4) ? keybinds_read_player(keys, 3) : 0;
   static const uint8 kKb2CtrlsIdx[12] = {
       7, 6, 5, 4, 9, 8, 3, 11, 2, 10, 1, 0};
   for (int i = 0; i < 12; i++) {
     HandleCommand(kKeys_Controls + i, (kb_p1 >> kKb2CtrlsIdx[i]) & 1);
     HandleCommand(kKeys_ControlsP2 + i, (kb_p2 >> kKb2CtrlsIdx[i]) & 1);
+    HandleCommand(kKeys_ControlsP3 + i, (kb_p3 >> kKb2CtrlsIdx[i]) & 1);
   }
 }
 
@@ -2914,6 +2949,12 @@ static void HandleCommand(uint32 j, bool pressed) {
   if (j < kKeys_Controls)
     return;
 
+  if (j >= kKeys_ControlsP3 && j <= kKeys_ControlsP3_Last) {
+    uint32 m = 1u << kKbdRemap[j - kKeys_ControlsP3];
+    g_input_state_p3 = pressed ? (g_input_state_p3 | m) : (g_input_state_p3 & ~m);
+    return;
+  }
+
   if (j <= kKeys_Controls_Last) {
     uint32 m = 1 << kKbdRemap[j - kKeys_Controls];
     g_input_state = pressed ? (g_input_state | m) : (g_input_state & ~m);
@@ -3006,7 +3047,8 @@ static void HandleInput(int keyCode, int keyMod, bool pressed) {
 }
 
 static uint32 GetActiveControllers() {
-  uint32 ctrl = g_config.has_keyboard_controls;
+  /* Bits 30/31 carry seats 1 and 2 only; seat 3 is published separately. */
+  uint32 ctrl = g_config.has_keyboard_controls & 3;
   ctrl |= g_gamepad[0].joystick_id != -1 ? 1 : 0;
   ctrl |= g_gamepad[1].joystick_id != -1 ? 2 : 0;
   return ctrl << 30;
@@ -3024,12 +3066,13 @@ static void OpenOneGamepad(SDL_JoystickID i) {
     if (GetGamepadInfo(joystick_id))
       return;
 
-    uint8 scan_order[3] = { SDL_GameControllerGetPlayerIndex(controller), 0, 1 };
+    uint8 scan_order[kHostGamepads + 1] = {
+        (uint8)SDL_GameControllerGetPlayerIndex(controller), 0, 1, 2 };
 
     int found_idx = -1;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < kHostGamepads + 1; i++) {
       uint8 j = scan_order[i];
-      if (j < 2 && g_config.enable_gamepad[j] && (i == 0 || g_gamepad[j].joystick_id == -1)) {
+      if (j < kHostGamepads && g_config.enable_gamepad[j] && (i == 0 || g_gamepad[j].joystick_id == -1)) {
         found_idx = j;
         break;
       }
@@ -3082,6 +3125,11 @@ static void SetPadButtonOrFallthrough(uint32 j, bool pressed) {
   if (j >= kKeys_ControlsP2 && j <= kKeys_ControlsP2_Last) {
     uint32 m = 0x1000u << kKbdRemap[j - kKeys_ControlsP2];
     g_pad_buttons = pressed ? (g_pad_buttons | m) : (g_pad_buttons & ~m);
+    return;
+  }
+  if (j >= kKeys_ControlsP3 && j <= kKeys_ControlsP3_Last) {
+    uint32 m = 1u << kKbdRemap[j - kKeys_ControlsP3];
+    g_pad_buttons_p3 = pressed ? (g_pad_buttons_p3 | m) : (g_pad_buttons_p3 & ~m);
     return;
   }
   HandleCommand(j, pressed);
@@ -3142,7 +3190,7 @@ static void HandleGamepadAxisInput(GamepadInfo *gi, int axis, Sint16 value) {
      * range; below it the stick reports no direction. Replaces a hardcoded
      * 10000 (~30%) that ignored the Configure Controllers value (issue #3). */
     int dz_player = (int)(gi - g_gamepad);
-    if (dz_player < 0 || dz_player > 1) dz_player = 0;
+    if (dz_player < 0 || dz_player >= kHostGamepads) dz_player = 0;
     int dz_radius = g_config.deadzone[dz_player] * 32767 / 100;
     if (gi->last_axis_x * gi->last_axis_x + gi->last_axis_y * gi->last_axis_y >= dz_radius * dz_radius) {
       // in the non deadzone part, divide the circle into eight 45 degree
@@ -3232,12 +3280,15 @@ static const char kDefaultConfigIniContent[] =
   "# when plugged in. Set to false to force keyboard-only.\n"
   "EnableGamepad1 = true\n"
   "EnableGamepad2 = true\n"
+  "# Third controller, used by 3-player simultaneous co-op.\n"
+  "EnableGamepad3 = true\n"
   "\n"
   "# Default Xbox-layout mapping. Order matches kKeys_Controls:\n"
   "#   Up, Down, Left, Right, Select, Start, A, B, X, Y, L, R\n"
   "# Edit + restart to rebind. Shoulder = L1/Lb (top), trigger = L2.\n"
   "Controls =   DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n"
-  "ControlsP2 = DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n";
+  "ControlsP2 = DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n"
+  "ControlsP3 = DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n";
 
 /* Ensure config.ini exists next to the executable (cwd after
  * snesrecomp_anchor_to_exe_dir). First launch from a clean release

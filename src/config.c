@@ -35,6 +35,8 @@ static const uint16 kDefaultKbdControls[kKeys_Total] = {
   A(SDLK_RETURN), C(SDLK_r), S(SDLK_p), _(SDLK_p), _(SDLK_TAB), N, N, _(SDLK_f), _(SDLK_r),
   // VolumeUp VolumeDown
   0, 0,
+  // ControlsP3 (no default keyboard keys; bind in [KeyMap] ControlsP3)
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
 #undef _
 #undef A
@@ -51,7 +53,7 @@ typedef struct KeyNameId {
 #define S(n) {#n, kKeys_##n, 1}
 static const KeyNameId kKeyNameId[] = {
   {"Null", kKeys_Null, 65535},
-  M(Controls), M(ControlsP2),
+  M(Controls), M(ControlsP2), M(ControlsP3),
   M(Load), M(Save),
   S(Fullscreen), S(Reset),
   S(Pause), S(PauseDimmed), S(Turbo), S(WindowBigger), S(WindowSmaller), S(VolumeUp), S(VolumeDown), S(DisplayPerf), S(ToggleRenderer),
@@ -75,6 +77,8 @@ static bool KeyMapHash_Add(uint16 key, uint16 cmd) {
     g_config.has_keyboard_controls |= 1;
   else if (cmd == kKeys_ControlsP2)
     g_config.has_keyboard_controls |= 2;
+  else if (cmd == kKeys_ControlsP3)
+    g_config.has_keyboard_controls |= 4;
 
   if ((keymap_hash_size & 0xff) == 0) {
     if (keymap_hash_size > 10000)
@@ -157,7 +161,7 @@ typedef struct GamepadMapEnt {
   uint16 cmd, next;
 } GamepadMapEnt;
 
-static uint16 joymap_first[kGamepadBtn_Count * 2];  // 2 gamepads
+static uint16 joymap_first[kGamepadBtn_Count * 3];  // 3 gamepads
 static GamepadMapEnt *joymap_ents;
 static int joymap_size;
 static uint8 has_assigned_joypad_controls;
@@ -271,6 +275,10 @@ static void RegisterDefaultKeys(void) {
     for (int i = 0; i < countof(kDefaultGamepadCmds); i++)
       GamepadMap_Add(kDefaultGamepadCmds[i] + kGamepadBtn_Count, 0, kKeys_ControlsP2 + i);
   }
+  if (!(has_assigned_joypad_controls & 4)) {
+    for (int i = 0; i < countof(kDefaultGamepadCmds); i++)
+      GamepadMap_Add(kDefaultGamepadCmds[i] + 2 * kGamepadBtn_Count, 0, kKeys_ControlsP3 + i);
+  }
 }
 
 static int GetIniSection(const char *s) {
@@ -332,13 +340,15 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       char *end;
       long mask = strtol(value, &end, 10);
       while (*end == ' ' || *end == '\t') ++end;
-      if (end == value || *end || mask < 0 || mask > 3) return false;
+      if (end == value || *end || mask < 0 || mask > 7) return false;
       g_config.keyboard_players = (int8)mask;
       return true;
     } else if (StringEqualsNoCase(key, "EnableGamepad1")) {
       return ParseBool(value, &g_config.enable_gamepad[0]);
     } else if (StringEqualsNoCase(key, "EnableGamepad2")) {
       return ParseBool(value, &g_config.enable_gamepad[1]);
+    } else if (StringEqualsNoCase(key, "EnableGamepad3")) {
+      return ParseBool(value, &g_config.enable_gamepad[2]);
     } else if (StringEqualsNoCase(key, "Deadzone")) {
       int dz = (int)strtol(value, NULL, 10);
       g_config.deadzone[0] = (uint8)(dz < 0 ? 0 : dz > 100 ? 100 : dz);
@@ -347,12 +357,18 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       int dz = (int)strtol(value, NULL, 10);
       g_config.deadzone[1] = (uint8)(dz < 0 ? 0 : dz > 100 ? 100 : dz);
       return true;
+    } else if (StringEqualsNoCase(key, "DeadzoneP3")) {
+      int dz = (int)strtol(value, NULL, 10);
+      g_config.deadzone[2] = (uint8)(dz < 0 ? 0 : dz > 100 ? 100 : dz);
+      return true;
     } else {
       for (int i = 0; i < countof(kKeyNameId); i++) {
         if (StringEqualsNoCase(key, kKeyNameId[i].name)) {
           int id = kKeyNameId[i].id;
-          has_assigned_joypad_controls |= (id == kKeys_Controls) ? 1 : (id == kKeys_ControlsP2) ? 2 : 0;
-          ParseGamepadArray(id == kKeys_ControlsP2 ? 1 : 0, value, kKeyNameId[i].id, kKeyNameId[i].size);
+          has_assigned_joypad_controls |= (id == kKeys_Controls) ? 1 : (id == kKeys_ControlsP2) ? 2 :
+                                          (id == kKeys_ControlsP3) ? 4 : 0;
+          ParseGamepadArray(id == kKeys_ControlsP3 ? 2 : id == kKeys_ControlsP2 ? 1 : 0,
+                            value, kKeyNameId[i].id, kKeyNameId[i].size);
           return true;
         }
       }
@@ -494,10 +510,12 @@ void ParseConfigFile(const char *filename) {
    * = false` in config.ini overrides this. */
   g_config.enable_gamepad[0] = true;
   g_config.enable_gamepad[1] = true;
+  g_config.enable_gamepad[2] = true;
   /* Analog-stick deadzone default ~30% of full range (matches the prior
    * hardcoded magnitude gate in HandleGamepadAxisInput). */
   g_config.deadzone[0] = 30;
   g_config.deadzone[1] = 30;
+  g_config.deadzone[2] = 30;
   /* Retained for old config/launcher ABI; adaptive HUD anchoring is automatic. */
   g_config.widescreen_hud = true;
 
@@ -659,6 +677,8 @@ void WriteConfigFile(const char *filename) {
     { "GamepadMap", "Deadzone" },
     { "GamepadMap", "DeadzoneP2" },
     { "GamepadMap", "KeyboardPlayers" },
+    { "GamepadMap", "EnableGamepad3" },
+    { "GamepadMap", "DeadzoneP3" },
   };
   const int N = (int)countof(kvs);
   snprintf(kvs[0].val, sizeof(kvs[0].val), "%d", g_config.window_scale ? g_config.window_scale : 3);
@@ -675,8 +695,10 @@ void WriteConfigFile(const char *filename) {
   snprintf(kvs[10].val, sizeof(kvs[10].val), "%s", g_config.netplay_player_name);
   snprintf(kvs[11].val, sizeof(kvs[11].val), "%d", g_config.deadzone[0]);
   snprintf(kvs[12].val, sizeof(kvs[12].val), "%d", g_config.deadzone[1]);
-  g_config.keyboard_players = (int8)(g_config.has_keyboard_controls & 3);
-  snprintf(kvs[13].val, sizeof(kvs[13].val), "%u", g_config.has_keyboard_controls & 3);
+  g_config.keyboard_players = (int8)(g_config.has_keyboard_controls & 7);
+  snprintf(kvs[13].val, sizeof(kvs[13].val), "%u", g_config.has_keyboard_controls & 7);
+  snprintf(kvs[14].val, sizeof(kvs[14].val), "%s", g_config.enable_gamepad[2] ? "true" : "false");
+  snprintf(kvs[15].val, sizeof(kvs[15].val), "%d", g_config.deadzone[2]);
 
   /* Read the existing file (may be absent on a fresh extract). */
   char *data = NULL;

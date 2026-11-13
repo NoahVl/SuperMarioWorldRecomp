@@ -310,6 +310,12 @@ bool SmwReplayBegin(uint32_t *inputs) {
   if(capture<0) {const char *v=getenv("SMW_REPLAY_RECORD");capture=v && *v!='0';}
   if((!capture && !enabled) || failed)return true;
   if(!SmwCoopPersistenceReady()) {close_segment();return true;}
+  if(SmwCoopPlayerCount()>2) {
+    /* Rows store the packed two-seat word; seat 3 is not representable. */
+    static bool warned_seats;
+    if(!warned_seats)fprintf(stderr,"[smw-replay] capture suspended: recordings support at most two players\n");
+    warned_seats=true; close_segment();return true;
+  }
   const char *why=SnesReplayWriterError(writer);
   if(why) {error(why);return true;}
   if(snes_runahead_active() || RtlSpeculativeFrame() ||

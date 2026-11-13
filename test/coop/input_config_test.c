@@ -27,6 +27,21 @@ int main(int argc,char **argv) {
     f=fopen(path,"rb");assert(f);char text[8192]={0};fread(text,1,sizeof(text)-1,f);fclose(f);
     assert(strstr(text,"Pause=p"));
     assert(strstr(text,"KeyboardPlayers = 2") || strstr(text,"KeyboardPlayers=2"));
-    puts("co-op input: shared keyboard, hotkey reload and assignment persistence passed");
+
+    /* Third seat: gamepad enable, deadzone, keyboard bit and persistence. */
+    f=fopen(path,"wb");assert(f);
+    fputs("[GamepadMap]\nKeyboardPlayers=4\nEnableGamepad3=false\nDeadzoneP3=45\n"
+          "ControlsP3 = DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n",f);
+    fclose(f);
+    g_config.keyboard_players=-1;g_config.has_keyboard_controls=0;
+    ParseConfigFile(path);
+    assert(g_config.has_keyboard_controls==4 && !g_config.enable_gamepad[2] && g_config.deadzone[2]==45);
+    assert(FindCmdForGamepadButton(kGamepadBtn_A+2*kGamepadBtn_Count,0)==kKeys_ControlsP3+7);
+    g_config.has_keyboard_controls=5;g_config.enable_gamepad[2]=true;
+    WriteConfigFile(path);
+    f=fopen(path,"rb");assert(f);memset(text,0,sizeof(text));fread(text,1,sizeof(text)-1,f);fclose(f);
+    assert(strstr(text,"KeyboardPlayers = 5") && strstr(text,"EnableGamepad3 = true") &&
+           strstr(text,"DeadzoneP3 = 45"));
+    puts("co-op input: shared keyboard, hotkey reload, three seats and assignment persistence passed");
     return 0;
 }
